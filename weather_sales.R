@@ -1,8 +1,9 @@
 
 rm(list = ls())
 
-setwd("~/Documents/Data_Science_sesh/opencampus_DS")
-library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(readr)
 
 
 sales <- read_csv2("OpenCampusSales.csv")
