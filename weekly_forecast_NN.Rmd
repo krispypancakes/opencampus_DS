@@ -1,0 +1,667 @@
+---
+title: "NN_Meteo"
+author: "Philip Thomsen"
+date: "5/31/2019"
+output: pdf_document
+---
+
+
+
+Clear and set working directory.
+```{r}
+setwd("~/Documents/Data_Science_sesh/Abschlusspräsentation")
+rm(list = ls())
+```
+
+
+Here we load all neccessary libraries for the analysis.
+```{r}
+library(readr)
+library(dplyr)
+library(jsonlite)
+library(e1071)
+library(Metrics)
+library(ggplot2)
+library(keras)
+library(leaps)
+library(psych)
+library(lubridate)
+library(tensorflow)
+#install_tensorflow()
+```
+
+Just import of data
+
+```{r}
+weather <- read_csv2("OpenCampusWetter.csv")
+sales <- read_csv2("OpenCampusSales.csv")
+names(weather) <- c("Date", "avg_clouds", "avg_temp", "avg_windspeed", "weather_code")
+```
+
+
+
+At first I analyze the data visually by just showing sales over time.
+
+```{r}
+head(sales)
+
+sales_ts <- ggplot(sales, aes(x = Date, y = Sales)) +
+            geom_line(col = "lightblue") +
+            labs(title = "Evolution of sales per day") +
+            geom_smooth(method = "lm", col = "tomato1")
+sales_ts
+#What are the enormous peaks all about ?
+#Might be more insightful to check the performance of months.
+
+```
+
+Here I change the structure of the sales data in order to analyze days, months, years.
+```{r}
+sales_new <- sales %>% mutate(Weekday = weekdays(Date), Month = months(Date), Year = year(Date)) %>%
+              select(Sales, Date, Weekday, Month, Year)
+
+# We can now check the peaks in each year and see what it´s all about.
+
+peak_days <- sales_new %>% 
+              group_by(Year) %>%
+                slice(which.max(Sales))
+peak_days
+# Historically, New Year´s Eve has been the day of the year with the highest sales value. However, that changed after 2016. 
+
+```
+
+Compute standard deviation and mean to show errorbars in the following plots.
+```{r}
+days <- sales_new %>%
+            group_by(Weekday) %>%
+              summarise(avg = mean(Sales), sd = sd(Sales))
+days
+
+months <- sales_new %>%
+            group_by(Month) %>%
+              summarise(avg = mean(Sales), sd = sd(Sales))
+print(months)
+  
+years <- sales_new %>%
+            group_by(Year) %>%
+              summarise(avg = mean(Sales), sd = sd(Sales))
+years
+
+```
+
+
+Plotting again to see if we get new indsides.
+```{r}
+plot_days <- ggplot(days, aes(x = reorder(Weekday, -avg, sum), y = avg)) +
+                geom_col(alpha = 0.69, fill = "lightblue") +
+                geom_errorbar(aes(ymin = avg-sd, ymax = avg + sd), width=.2, col = "tomato1", alpha = 0.69) +
+                  labs(x = "Weekday", y = "Average daily Sales", title = "Performance of Weekdays")
+plot_days
+
+#We can observe that Fridays and Saturdays are the best ones and sunday being the worst, just because of the opening hours I would guess.
+
+plot_months <- ggplot(months, aes(x = reorder(Month, -avg, sum), y = avg)) +
+                geom_col(alpha = 0.69, fill = "lightblue") +
+                geom_errorbar(aes(ymin = avg-sd, ymax = avg + sd), width=.2, col = "tomato1", alpha = 0.69) +
+                  labs(x = "Months", y = "Sales", title = "Performance of Months")
+plot_months
+#Looking at the months one could think of a correlation of Sales and temperature, because the better performing months are the ones you would expect to be the warmest ones.
+
+plot_years <- ggplot(years, aes(x = reorder(Year, -avg, sum), y = avg)) +
+                geom_col(alpha = 0.69, fill = "lightblue") +
+                geom_errorbar(aes(ymin = avg-sd, ymax = avg + sd), width=.2, col = "tomato1", alpha = 0.69) +
+                  labs(x = "Year", y = "Average daily Sales", title = "Performance of Years")
+plot_years
+#A closer look at the data at hand reveals that we only have data until the end of september of 2018.
+```
+
+
+Here I change the structure to a weekly perspective, because I later want to construct a classifier predicting a good, average or bad week. sales_w(eek)
+&
+Factorization of weekdays, months, years and weeks.
+```{r}
+sales_w <- sales_new %>% 
+            mutate(Week = week(Date))
+sales_w$Weekday <- as.factor(sales_w$Weekday)
+sales_w$Month <- as.factor(sales_w$Month)
+sales_w$Year <- as.factor(sales_w$Year)
+sales_w$Week <- as.factor(sales_w$Week)
+```
+
+
+
+
+```{r}
+sales_w %>% 
+  filter(Year == "2011") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2011")
+
+sales_w %>% 
+  filter(Year == "2012") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2012")
+
+sales_w %>% 
+  filter(Year == "2013") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2013")
+
+sales_w %>% 
+  filter(Year == "2014") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2014")
+
+sales_w %>% 
+  filter(Year == "2015") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2015")
+
+sales_w %>% 
+  filter(Year == "2016") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2016")
+
+sales_w %>% 
+  filter(Year == "2017") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2017")
+
+sales_w %>% 
+  filter(Year == "2018") %>%
+  group_by(Week) %>%
+  summarise(avg_daily_sales = mean(Sales)) %>%
+  ggplot(aes(x = Week, y = avg_daily_sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "avg daily Sales per week 2018")
+```
+
+
+
+How do wind and temp behave over time ?
+
+```{r}
+weather_new <- weather %>% mutate(Weekday = weekdays(Date), Month = months(Date), Year = year(Date))
+
+# Temperature:
+
+# To obtain a representative trend, I exclude 2018, because we don´t have data for the entire year.
+plot_data <- weather_new %>%
+  filter(Year == c(2011, 2012, 2013, 2014, 2015, 2016, 2017))
+
+ggplot(plot_data, aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy")+
+  geom_smooth(method = "lm", col = "red")+
+  labs(title = "daily avg temperature from 2011 until 2018")
+# One can observe a positive trend, although the hot summer of 2018 is not even included.
+
+# Wind :
+ggplot(plot_data, aes(x = Date, y = avg_windspeed)) +
+  geom_line(col = "navy")
+
+
+```
+
+And over a year ?
+
+```{r}
+weather_new %>% 
+  filter(Year == "2011") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2011")
+
+
+weather_new %>% 
+  filter(Year == "2012") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2012")
+
+weather_new %>% 
+  filter(Year == "2013") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2013")
+# In 2013 we have apparently false data
+  # we could use somethin like an EM algorithm for mising data or exclude data for further analysis.
+  # However, we do that only after combining weather and sales data
+
+weather_new %>% 
+  filter(Year == "2014") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2014")
+
+weather_new %>% 
+  filter(Year == "2015") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2015")
+
+weather_new %>% 
+  filter(Year == "2016") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2016")
+
+weather_new %>% 
+  filter(Year == "2017") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2017")
+
+weather_new %>% 
+  filter(Year == "2018") %>%
+  ggplot(aes(x = Date, y = avg_temp)) +
+  geom_line(col = "navy") +
+  labs(title = "temperature 2018")
+
+```
+
+
+Combine weather and sales, not sure how to proceed with 2013 data. 
+```{r}
+
+data_c <- sales_w %>% 
+  full_join(weather, by = "Date")
+
+head(data_c)
+
+
+```
+
+
+
+
+Add a weekly and daily difference to the monthly mean in temperature
+```{r}
+mean_temp_month <- data_c %>% 
+              group_by(Year,Month)%>%
+              summarise(mean_temp_m = mean(avg_temp))
+
+mean_temp_week <- data_c %>%
+                  group_by(Year, Week) %>%
+                  summarise(mean_temp_w = mean(avg_temp))
+                  
+
+week_data_temp <- data_c %>% 
+                  right_join(mean_temp_month, by = c("Year", "Month")) %>%
+                  right_join(mean_temp_week, by = c("Year", "Week")) %>%
+                  mutate(weekly_temp_diff = abs(mean_temp_w - mean_temp_m), daily_temp_diff = abs(avg_temp - mean_temp_m)) %>%
+                  select(-c(mean_temp_w, mean_temp_m))
+
+```
+
+
+correlation plots
+```{r}
+ggplot(week_data_temp, aes(x = avg_temp, y = Sales)) +
+  geom_point(col = "lightblue") +
+  labs(title = "temperature and sales")
+
+
+ggplot(week_data_temp, aes(x = avg_clouds, y = Sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "clouds and sales")
+# interesting ! let´s compare it to its histogram: boohh
+
+ggplot(week_data_temp, aes(x = avg_clouds)) +
+  geom_bar(fill = "lightblue") +
+  labs(title = "clouds")
+
+ggplot(week_data_temp, aes(x = avg_windspeed, y = Sales)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "wind and sales")
+
+ggplot(week_data_temp, aes(x = weather_code, y = Sales)) +
+  geom_point(col = "lightblue") +
+  labs(title = "weather(code) and sales")
+
+ggplot(week_data_temp, aes(x = weekly_temp_diff, y = Sales)) +
+  geom_point(col = "lightblue") +
+  labs(title = "")
+
+ggplot(week_data_temp, aes(x = daily_temp_diff, y = Sales)) +
+  geom_point(col = "lightblue") +
+  labs(title = "")
+```
+
+A full linear model obtains a R^2 of 0.7484 and RMSE of 130.867
+```{r}
+full_lin_reg_1 <- lm(Sales~., data = week_data_temp)
+summary(full_lin_reg_1)
+sqrt(mean(summary(full_lin_reg_1)$residuals^2))
+
+full_lin_reg_2 <- lm(Sales ~ Weekday + Month + avg_clouds + avg_temp + avg_windspeed + weather_code + weekly_temp_diff + daily_temp_diff, data = week_data_temp)
+summary(full_lin_reg_2)
+sqrt(mean(summary(full_lin_reg_2)$residuals^2))
+
+```
+
+Prediction of 2018:
+
+First: Splitting data.
+
+```{r}
+data.train <- week_data_temp %>%
+                filter(Year !="2018") %>%
+                select(-Year)
+data.test <- week_data_temp %>%
+                filter(Year =="2018")%>%
+                select(-Year)
+```
+
+
+```{r}
+full_lin.model <- lm(Sales~., data = data.train)
+full_lin.pred <- predict(full_lin.model, data.test)
+
+R_sq_full_lin <- summary(full_lin.model)$adj.r.sq
+RMSE_full_lin <- rmse(data.test$Sales, full_lin.pred)
+  
+lin.pred.matrix <- data.test %>%
+                    select(Date, Sales, Week) %>%
+                    cbind(full_lin.pred)
+names(lin.pred.matrix) <- c("Date", "Sales", "Week", "Prediction_Value")
+                    
+
+ggplot(lin.pred.matrix, aes(x = Date, y = Sales)) +
+       geom_line( col = "navy", show.legend = TRUE) +
+        geom_line(aes(x = Date, y = full_lin.pred), col = "tomato1", show.legend = TRUE) +
+        labs(title = "Prediction of Sales in 2018 using linear Regression", subtitle = "adj R^2 = 0.6736, RMSE = 201.8904")
+
+ggplot(lin.pred.matrix, aes(x = Prediction_Value, y = Sales)) + 
+  geom_point(col = "blue")
+
+```
+
+Model selection: best forward stepwise selection.
+```{r}
+regfit.fwd <- regsubsets(Sales ~ ., data = data.train, really.big = T, method = "forward", nvmax = 90)
+fwd.summary <- summary(regfit.fwd)
+
+fwd.summary$adjr2
+
+plot(fwd.summary$adjr2, 
+     xlab = 'Number of Variables',
+     ylab = 'Adjusted RSq', 
+     type = 'l')
+
+
+best = which.max(fwd.summary$adjr2)
+# put the point on the plot that is already created with points()
+points(best, fwd.summary$adjr2[best],
+       col='red', cex=2, pch=20)
+
+best
+
+fwd.summary$adjr2[best]
+
+
+```
+
+There is no implemented predict function for regsubsets, so I got some help from the internet.
+https://rstudio-pubs-static.s3.amazonaws.com/117080_1924569ef91b426c8ea7bff8dcbaf4f3.html
+```{r}
+predict.regsubsets <- function(object,newdata,id,...){
+form <- as.formula(object$call[[2]])
+mat <- model.matrix(form,newdata)
+coefi <- coef(object,id=id)
+xvars <- names(coefi)
+mat[,xvars]%*%coefi
+}
+
+```
+
+
+```{r}
+fwd.pred <- predict.regsubsets(regfit.fwd,data.test, 45)
+
+fwd.pred.matrix <- data.test %>%
+                    select(Date, Sales, Week) %>%
+                    cbind(fwd.pred)
+names(fwd.pred.matrix) <- c("Date", "Sales", "Week", "Prediction_Value")
+
+RMSE_fwd <- rmse(data.test$Sales, fwd.pred.matrix$Prediction_Value)
+
+ggplot(fwd.pred.matrix, aes(x = Date, y = Sales)) +
+       geom_line( col = "navy", show.legend = TRUE) +
+        geom_line(aes(x = Date, y = Prediction_Value), col = "tomato1", show.legend = TRUE) +
+        labs(title = "Prediction of Sales in 2018 using fwd subset selection", subtitle = "R^2 = 0.6749, RMSE = 201.2455")
+
+ggplot(fwd.pred.matrix, aes(x = Prediction_Value, y = Sales)) + 
+  geom_point(col = "blue")
+
+
+fwd.summary$adjr2[best]
+RMSE_fwd
+```
+
+
+
+```{r}
+svm.model <- tune(svm, Sales ~. , data = data.train,
+                 ranges = list(epsilon = seq(0,1,0.2), cost = seq(0.05,264, length.out = 3)))
+
+svm.pred_1 <- predict(svm.model$best.model, data.test)
+RMSE_svm_1 <- rmse(data.test$Sales, svm.pred_1)
+
+svm.model_2 <- tune(svm, Sales ~. , data = data.train,
+                 ranges = list(epsilon = seq(0,0.5,0.2), cost = seq(100,264, length.out = 3)))
+svm.pred_2 <- predict(svm.model_2$best.model, data.test)
+RMSE_svm_2 <- rmse(data.test$Sales, svm.pred_2)
+
+svm.model_3 <- tune(svm, Sales ~. , data = data.train,
+                 ranges = list(epsilon = seq(0.3,0.5,0.1), cost = seq(100,150, length.out = 3)))
+svm.pred_3 <- predict(svm.model_3$best.model, data.test)
+RMSE_svm_3 <- rmse(data.test$Sales, svm.pred_3)
+
+RMSEvec <- c(RMSE_svm_1, RMSE_svm_2, RMSE_svm_3)
+best <- which.min(modelvec)
+
+best.svm <- modelvec[best]
+
+# parameters of best model: Eps = 0.4; Cost = 100
+
+if (any(RMSEvec < RMSE_fwd)){
+  print("It was worth it.")
+}else{
+  print("What a waste of time. ")
+}
+
+
+```
+
+Plot the svm-results
+```{r}
+svm.pred.matrix <- data.test %>%
+                    select(Date, Sales, Week) %>%
+                    cbind(svm.pred_2)
+names(svm.pred.matrix) <- c("Date", "Sales", "Week", "Prediction_Value")
+
+ggplot(svm.pred.matrix, aes(x = Date, y = Sales)) +
+      geom_line(col = "navy") +
+      geom_line(aes(x = Date, y = Prediction_Value), col = "tomato1") +
+      labs(title = "Prediction of Sales in 2018 using a SVM", subtitle = "RMSE = 216.13749")
+
+# Although it has a greater RMSE, it looks like it would resemble the data more accurately
+```
+
+
+Setting up the data structure for the Neural net:
+  Dummy variables for test and training data
+```{r}
+# TRAIN
+bin_days.train <- as.data.frame(dummy.code(data.train$Weekday))
+bin_months.train <- as.data.frame(dummy.code(data.train$Month))
+
+data.train.NN_weather <- data.train %>%
+                  select(Sales, avg_clouds, avg_temp, avg_windspeed, weather_code, 
+                         weekly_temp_diff,  daily_temp_diff)
+
+data.train.NN <- data.train %>%
+                  select(Sales, avg_clouds, avg_temp, avg_windspeed, weather_code, 
+                         weekly_temp_diff,  daily_temp_diff)%>%
+                  cbind(bin_days.train, bin_months.train)    
+# TEST
+
+bin_days.test <- as.data.frame(dummy.code(data.test$Weekday))
+bin_months.test <- as.data.frame(dummy.code(data.test$Month))
+
+data.test.NN_weather <- data.test %>%
+                  select(Sales, avg_clouds, avg_temp, avg_windspeed, weather_code, 
+                         weekly_temp_diff,  daily_temp_diff)
+
+data.test.NN <- data.test %>%
+                  select(Date, Sales, avg_clouds, avg_temp, avg_windspeed, weather_code, 
+                         weekly_temp_diff,  daily_temp_diff)%>%
+                  cbind(bin_days.test, bin_months.test)
+
+data.training.small_weather<- sample_frac(data.test.NN_weather, .1)
+data.training.small<- sample_frac(data.test.NN, .1)
+
+head(data.training.small)
+
+```
+
+Splitting data in x and y matrices and scale them:
+```{r}
+x.train <- data.training.small %>%
+            select(-Sales)
+x.train_w <- data.training.small_weather %>%
+              select(-Sales)
+
+y.train <- data.training.small%>% 
+            select(Sales)
+y.train <- y.train / 100
+
+y.train_w <- data.training.small_weather%>%
+              select(Sales)
+  
+x.test <- data.test.NN %>%
+            select(-Sales)
+
+x.test_w <- data.test.NN_weather %>%
+  select(-Sales)
+y.test <- data.test.NN %>%
+            select(Sales)
+y.test_w <- data.test.NN_weather%>%
+  select(Sales)
+y.test <- y.test / 100
+
+dim.train <- dim(x.train)
+
+dim.test <- dim(x.test)
+# Scale input to values between 0 and 1
+
+x.train <- x.train %>%
+            select(-Date) %>%
+            mutate_all(function(x) as.numeric(as.character(x)))
+x.train <- scale(x.train)
+
+x.test <- x.test %>%
+            select(-Date) %>%
+            mutate_all(function(x) as.numeric(as.character(x)))
+x.test <- scale(x.test)
+
+x.train <- as.matrix(x.train)
+y.train <- as.matrix(y.train)
+
+x.train_w <- as.matrix(x.train_w)
+y.train_w <- as.matrix(y.train_w)
+
+x.test <- as.matrix(x.test)
+y.test <- as.matrix(y.test)
+
+
+x.test_w <- as.matrix(x.test_w)
+y.test_w <- as.matrix(y.test_w)
+```
+
+Building a model
+```{r}
+build_model <- function() {
+  
+  model <- keras_model_sequential() %>%
+    layer_dense(units = 64, activation = "relu",
+                input_shape = dim(x_train)[2]) %>%
+    layer_dropout(rate = 0.25) %>% 
+    layer_dense(units = 32, activation = "relu") %>%
+    layer_dropout(rate = 0.25) %>% 
+    layer_dense(units = 1)
+  
+  model %>% compile(
+    loss = "mse",
+    optimizer = optimizer_rmsprop(),
+    metrics = list("mean_absolute_error")
+  )
+  
+  model
+}
+
+model <- build_model()
+model %>% summary()
+
+```
+
+Seeting up training
+```{r}
+
+
+# Display training progress by printing a single dot for each completed epoch.
+print_dot_callback <- callback_lambda(
+  on_epoch_end = function(epoch, logs) {
+    if (epoch %% 80 == 0) cat("\n")
+    cat(".")
+  }
+)   
+
+# The patience parameter is the amount of epochs to check for improvement.
+early_stop <- callback_early_stopping(monitor = "val_loss", patience = 20)
+
+epochs <- 500
+
+```
+
+```{r}
+# Fit the model and store training stats
+history <- model %>% fit(
+  x.train,
+  y.train,
+  epochs = epochs,
+  validation_split = 0.2,
+  verbose = 0,
+  callbacks = list(print_dot_callback)
+  #callbacks = list(early_stop, print_dot_callback)
+)
+
+
+
+plot(history, metrics = "mean_absolute_error", smooth = FALSE) +
+  coord_cartesian(ylim = c(0, 1000))
+
+```
+
+
